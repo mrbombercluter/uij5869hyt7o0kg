@@ -13,6 +13,108 @@ const stripe = new Stripe(stripeSecret, {
 
 const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
+const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1385407433605779638/xS49AvLzF_mscpY7Ou265hvwpD9saQDXNTFSqxYHzXsibo3pCA43JTQOUg-Z1hgcVyTV';
+
+// Helper function to send Discord notifications
+async function sendDiscordNotification(data: {
+  timezone: string;
+  country: string;
+  product: string;
+  paymentMethod: string;
+  paid: boolean;
+}) {
+  try {
+    const embed = {
+      title: '💳 Payment Completed',
+      color: data.paid ? 0x00ff00 : 0xff0000,
+      fields: [
+        {
+          name: '🌍 Timezone',
+          value: data.timezone,
+          inline: true
+        },
+        {
+          name: '🏳️ Country',
+          value: data.country,
+          inline: true
+        },
+        {
+          name: '📦 Product',
+          value: data.product,
+          inline: true
+        },
+        {
+          name: '💳 Payment Method',
+          value: data.paymentMethod,
+          inline: true
+        },
+        {
+          name: '✅ Paid',
+          value: data.paid ? 'Yes' : 'No',
+          inline: true
+        }
+      ],
+      timestamp: new Date().toISOString(),
+      footer: {
+        text: 'CS2 Configs Pro - Webhook'
+      }
+    };
+
+    const payload = {
+      embeds: [embed]
+    };
+
+    await fetch(DISCORD_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    console.error('Failed to send Discord notification:', error);
+  }
+}
+
+// Helper function to get location info from Stripe customer
+async function getCustomerLocationInfo(customerId: string) {
+  try {
+    const customer = await stripe.customers.retrieve(customerId);
+    
+    // Try to get location from customer address or payment method
+    let country = 'Unknown';
+    let timezone = 'UTC';
+    
+    if (customer && !customer.deleted) {
+      // Get country from customer address if available
+      if (customer.address?.country) {
+        country = customer.address.country;
+      }
+      
+      // Try to get timezone based on country (simplified mapping)
+      const countryTimezones: Record<string, string> = {
+        'US': 'America/New_York',
+        'GB': 'Europe/London',
+        'DE': 'Europe/Berlin',
+        'FR': 'Europe/Paris',
+        'CA': 'America/Toronto',
+        'AU': 'Australia/Sydney',
+        'JP': 'Asia/Tokyo',
+        'BR': 'America/Sao_Paulo',
+        'IN': 'Asia/Kolkata',
+        'CN': 'Asia/Shanghai',
+      };
+      
+      timezone = countryTimezones[country] || 'UTC';
+    }
+    
+    return { country, timezone };
+  } catch (error) {
+    console.error('Failed to get customer location info:', error);
+    return { country: 'Unknown', timezone: 'UTC' };
+  }
+}
+
 Deno.serve(async (req) => {
   try {
     // Handle OPTIONS request for CORS preflight
@@ -116,10 +218,33 @@ async function handleEvent(event: Stripe.Event) {
           console.error('Error inserting order:', orderError);
           return;
         }
+
+        // Send Discord notification for successful payment
+        const locationInfo = await getCustomerLocationInfo(customerId);
+        await sendDiscordNotification({
+          timezone: locationInfo.timezone,
+          country: locationInfo.country,
+          product: "Pikaware's configuration",
+          paymentMethod: 'Card (Stripe)',
+          paid: true
+        });
+
         console.info(`Successfully processed one-time payment for session: ${checkout_session_id}`);
       } catch (error) {
         console.error('Error processing one-time payment:', error);
       }
+    }
+
+    // Also send notification for successful subscription payments
+    if (isSubscription && event.type === 'checkout.session.completed') {
+      const locationInfo = await getCustomerLocationInfo(customerId);
+      await sendDiscordNotification({
+        timezone: locationInfo.timezone,
+        country: locationInfo.country,
+        product: "Pikaware's configuration (Subscription)",
+        paymentMethod: 'Card (Stripe)',
+        paid: true
+      });
     }
   }
 }
